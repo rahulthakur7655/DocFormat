@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --white: #ffffff;
+  --baby-pink: #b3d9f7;
+  --baby-pink-light: #d6edfb;
+  --baby-pink-lighter: #eef7fd;
+  --baby-pink-dark: #90c8f0;
+  --baby-pink-border: #b8d9f0;
+  --pink-accent: #3a9fd6;
+  --pink-deep: #1e7db5;
+  --text-dark: #0d2a3d;
+  --text-mid: #2e5f7e;
+  --text-light: #5a8fa8;
+  --shadow-sm: 0 2px 8px rgba(30, 125, 181, 0.1);
+  --shadow-md: 0 4px 20px rgba(30, 125, 181, 0.15);
+  --shadow-lg: 0 8px 32px rgba(30, 125, 181, 0.2);
+  --radius: 14px;
+  --radius-sm: 8px;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: linear-gradient(135deg, #eef7fd 0%, #ffffff 50%, #d6edfb 100%);
+  min-height: 100vh;
+  color: var(--text-dark);
+}
+
+#root {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  text-align: left;
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--baby-pink-lighter);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--baby-pink-dark);
+  border-radius: 10px;
+}
