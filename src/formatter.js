@@ -321,6 +321,34 @@ export function generateRTF({ blocks, tocEntries }) {
     })
   }
 
+  // ── Page break → List of Tables ──
+  parts.push('{\\pard\\pagebb\\par}')
+  parts.push(rtfPara('LIST OF TABLES', { bold: true, size: 16, align: 'center', spaceAfter: 120 }))
+  parts.push('{\\pard\\qc\\f0\\fs24\\sb0\\sa120\\brdrb\\brdrs\\brdrw10\\brdrcf2 \\par}')
+
+  const tableBlocks = blocks.filter(b => b.type === 'table')
+  if (tableBlocks.length > 0) {
+    tableBlocks.forEach((b, i) => {
+      parts.push(rtfTocRow(b.caption, String(i + 1), 0, false))
+    })
+  } else {
+    parts.push(rtfPara('No tables found in document.', { size: 12, align: 'center', color: 1 }))
+  }
+
+  // ── Page break → List of Figures ──
+  parts.push('{\\pard\\pagebb\\par}')
+  parts.push(rtfPara('LIST OF FIGURES', { bold: true, size: 16, align: 'center', spaceAfter: 120 }))
+  parts.push('{\\pard\\qc\\f0\\fs24\\sb0\\sa120\\brdrb\\brdrs\\brdrw10\\brdrcf2 \\par}')
+
+  const figureBlocks = blocks.filter(b => b.type === 'figure')
+  if (figureBlocks.length > 0) {
+    figureBlocks.forEach((b, i) => {
+      parts.push(rtfTocRow(b.caption, String(i + 1), 0, false))
+    })
+  } else {
+    parts.push(rtfPara('No figures found in document.', { size: 12, align: 'center', color: 1 }))
+  }
+
   // Page break before body
   parts.push('{\\pard\\pagebb\\par}')
 
@@ -522,7 +550,7 @@ function rtfTableRow(cells, colW, colCount, isHeader, isAlt = false) {
 
 // ── Index-only RTF generator (for the Index Builder section) ─────────────────
 // Renders ALL rows the user entered — no auto-added sections
-export function generateIndexRTF(indexRows) {
+export function generateIndexRTF(indexRows, tableList = [], figureList = []) {
   const header = [
     '{\\rtf1\\ansi\\deff0',
     '{\\fonttbl{\\f0\\froman\\fcharset0 Times New Roman;}}',
@@ -537,23 +565,54 @@ export function generateIndexRTF(indexRows) {
 
   const parts = [header]
 
-  // Title
+  // ── TABLE OF CONTENTS ──
   parts.push(rtfPara('TABLE OF CONTENTS', { bold: true, size: 16, align: 'center', spaceAfter: 160 }))
-  // Divider line (via bottom border on empty para)
   parts.push('{\\pard\\qc\\f0\\fs24\\sb0\\sa120\\brdrb\\brdrs\\brdrw10\\brdrcf2 \\par}')
 
-  // All rows exactly as user entered
   indexRows.forEach(r => {
     const lvl    = parseInt(r.level) || 1
-    // level 0 = prelim: bold, no indent, roman page
-    // level 1 = chapter: bold, no indent
-    // level 2 = section: normal, indent 360
-    // level 3 = sub-section: normal italic, indent 720
     const indent = lvl <= 1 ? 0 : (lvl - 1) * 360
     const bold   = lvl <= 1
     const italic = lvl >= 3
     parts.push(rtfTocRowFull(r.text || '', r.page || '', indent, bold, italic))
   })
+
+  // ── LIST OF TABLES ──
+  parts.push('{\\pard\\pagebb\\par}')
+  parts.push(rtfPara('LIST OF TABLES', { bold: true, size: 16, align: 'center', spaceAfter: 160 }))
+  parts.push('{\\pard\\qc\\f0\\fs24\\sb0\\sa120\\brdrb\\brdrs\\brdrw10\\brdrcf2 \\par}')
+
+  if (tableList.length > 0) {
+    tableList.forEach(t => {
+      parts.push(rtfTocRowFull(t.caption, t.page || '', 0, false, false))
+    })
+  } else {
+    // Extract table entries from indexRows if any match "Table" pattern
+    const tableRows = indexRows.filter(r => /^table\s+\d/i.test(r.text))
+    if (tableRows.length > 0) {
+      tableRows.forEach(r => parts.push(rtfTocRowFull(r.text, r.page || '', 0, false, false)))
+    } else {
+      parts.push(rtfPara('No tables listed.', { size: 12, align: 'center', color: 1 }))
+    }
+  }
+
+  // ── LIST OF FIGURES ──
+  parts.push('{\\pard\\pagebb\\par}')
+  parts.push(rtfPara('LIST OF FIGURES', { bold: true, size: 16, align: 'center', spaceAfter: 160 }))
+  parts.push('{\\pard\\qc\\f0\\fs24\\sb0\\sa120\\brdrb\\brdrs\\brdrw10\\brdrcf2 \\par}')
+
+  if (figureList.length > 0) {
+    figureList.forEach(f => {
+      parts.push(rtfTocRowFull(f.caption, f.page || '', 0, false, false))
+    })
+  } else {
+    const figRows = indexRows.filter(r => /^fig(ure)?\s*[\d.]/i.test(r.text))
+    if (figRows.length > 0) {
+      figRows.forEach(r => parts.push(rtfTocRowFull(r.text, r.page || '', 0, false, false)))
+    } else {
+      parts.push(rtfPara('No figures listed.', { size: 12, align: 'center', color: 1 }))
+    }
+  }
 
   parts.push('}')
   return parts.join('\n')
@@ -567,6 +626,57 @@ function rtfTocRowFull(label, page, indentTwips, bold, italic = false) {
   const it = italic ? '\\i'  : ''
   const i0 = italic ? '\\i0' : ''
   return `{\\pard\\ql\\f0\\fs${FS(12)}\\sl360\\slmult1\\sb0\\sa60${b}${it}\\li${indentTwips}${tabStop} ${esc(label)}\\tab${page}${b0}${i0}\\par}`
+}
+
+// ── Unstructured Index Parser ─────────────────────────────────────────────────
+// Takes raw pasted text like:
+//   "Chapter 1 Introduction 1"
+//   "1.1 Background 2"
+//   "Certificate i"
+// Returns array of { level, text, page }
+export function parseUnstructuredIndex(rawText) {
+  const lines  = rawText.split('\n').map(l => l.trim()).filter(Boolean)
+  const result = []
+
+  for (const line of lines) {
+    // Try to extract trailing page number (arabic or roman)
+    // e.g. "Chapter 1 Introduction 1"  →  text="Chapter 1 Introduction", page="1"
+    //      "Certificate i"             →  text="Certificate",             page="i"
+    const pageMatch = line.match(/^(.+?)\s+((?:[ivxlcdmIVXLCDM]+|\d+))$/)
+    let text = line
+    let page = ''
+
+    if (pageMatch) {
+      // Validate that the last token looks like a page number
+      const candidate = pageMatch[2]
+      if (/^\d+$/.test(candidate) || /^[ivxlcdmIVXLCDM]+$/i.test(candidate)) {
+        text = pageMatch[1].trim()
+        page = candidate
+      }
+    }
+
+    // Determine level
+    let level = '2'
+
+    if (/^chapter\s+\d+/i.test(text)) {
+      level = '1'
+    } else if (/^(abstract|introduction|conclusion|references|bibliography|acknowledgements?|appendix|list\s+of\s+(tables|figures)|table\s+of\s+contents|symbols\s+and\s+abbreviations|certificate|declaration|preface|foreword)/i.test(text)) {
+      level = '0'
+    } else if (/^\d+\.\d+\.\d+/.test(text)) {
+      level = '3'
+    } else if (/^\d+\.\d+/.test(text)) {
+      level = '2'
+    } else if (/^\d+\.?\s+\S/.test(text) && !/^\d+\.\d+/.test(text)) {
+      level = '1'
+    } else if (text === text.toUpperCase() && text.length > 2 && /[A-Z]/.test(text)) {
+      // ALL CAPS short line → treat as chapter-level
+      level = '1'
+    }
+
+    result.push({ level, text, page })
+  }
+
+  return result
 }
 
 // Keep plain text as fallback (used for Raw Text tab)

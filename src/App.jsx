@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import './App.css'
-import { parseDocument, generatePlainText, generateRTF, generateIndexRTF } from './formatter'
+import { parseDocument, generatePlainText, generateRTF, generateIndexRTF, parseUnstructuredIndex } from './formatter'
 
 // ── Placeholder ───────────────────────────────────────────────────────────────
 const PLACEHOLDER = `Paste your unstructured text here...
@@ -141,7 +141,9 @@ export default function App() {
   const [hasOutput,   setHasOutput]   = useState(false)
 
   // Index builder state
-  const [indexRows,   setIndexRows]   = useState(DEFAULT_INDEX_ROWS)
+  const [indexRows,      setIndexRows]      = useState(DEFAULT_INDEX_ROWS)
+  const [rawIndexInput,  setRawIndexInput]  = useState('')
+  const [indexInputMode, setIndexInputMode] = useState('manual') // 'manual' | 'parse'
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2800) }
 
@@ -212,6 +214,15 @@ export default function App() {
     a.click()
     URL.revokeObjectURL(url)
     showToast('📥 Downloaded! Open table_of_contents.rtf in Word/WPS')
+  }
+
+  const handleParseIndex = () => {
+    if (!rawIndexInput.trim()) { showToast('⚠️ Paste your unstructured index text first'); return }
+    const parsed = parseUnstructuredIndex(rawIndexInput)
+    if (parsed.length === 0) { showToast('⚠️ Could not detect any headings — check format'); return }
+    setIndexRows(parsed)
+    setIndexInputMode('manual')
+    showToast(`✅ Parsed ${parsed.length} entries — review and download`)
   }
 
   const wordCount  = rawInput.trim() ? rawInput.trim().split(/\s+/).length : 0
@@ -304,6 +315,8 @@ export default function App() {
                   <div className="output-tabs">
                     <button className={`tab-btn ${activeTab === 'preview' ? 'active' : ''}`} onClick={() => setActiveTab('preview')}>👁 Preview</button>
                     <button className={`tab-btn ${activeTab === 'toc'     ? 'active' : ''}`} onClick={() => setActiveTab('toc')}>📑 TOC</button>
+                    <button className={`tab-btn ${activeTab === 'lot'     ? 'active' : ''}`} onClick={() => setActiveTab('lot')}>📊 Tables</button>
+                    <button className={`tab-btn ${activeTab === 'lof'     ? 'active' : ''}`} onClick={() => setActiveTab('lof')}>🖼 Figures</button>
                     <button className={`tab-btn ${activeTab === 'raw'     ? 'active' : ''}`} onClick={() => setActiveTab('raw')}>&lt;/&gt; Raw</button>
                   </div>
                   {hasOutput && (
@@ -344,6 +357,22 @@ export default function App() {
                   </div>
                 )}
 
+                {hasOutput && activeTab === 'lot' && (
+                  <div className="formatted-output">
+                    <div className="word-preview toc-preview">
+                      <ListOfTablesRenderer blocks={blocks} />
+                    </div>
+                  </div>
+                )}
+
+                {hasOutput && activeTab === 'lof' && (
+                  <div className="formatted-output">
+                    <div className="word-preview toc-preview">
+                      <ListOfFiguresRenderer blocks={blocks} />
+                    </div>
+                  </div>
+                )}
+
                 {hasOutput && activeTab === 'raw' && (
                   <pre className="raw-output">{plainText}</pre>
                 )}
@@ -375,65 +404,104 @@ export default function App() {
                   <div className="icon">✏️</div>
                   <div><h2>Build Your Index</h2><p>Add / edit rows, set level and page number</p></div>
                 </div>
+                {/* Mode toggle */}
+                <div className="idx-mode-toggle">
+                  <button
+                    className={`idx-mode-btn ${indexInputMode === 'parse' ? 'active' : ''}`}
+                    onClick={() => setIndexInputMode('parse')}
+                  >📋 Paste &amp; Parse</button>
+                  <button
+                    className={`idx-mode-btn ${indexInputMode === 'manual' ? 'active' : ''}`}
+                    onClick={() => setIndexInputMode('manual')}
+                  >✏️ Manual Edit</button>
+                </div>
               </div>
               <div className="panel-body" style={{ padding: '16px 20px' }}>
-                <div className="index-table-wrap">
-                  <table className="index-editor-table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 70 }}>Level</th>
-                        <th>Heading / Title</th>
-                        <th style={{ width: 60 }}>Page</th>
-                        <th style={{ width: 80 }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {indexRows.map((row, idx) => (
-                        <tr key={idx} className={`idx-row idx-level-${row.level}`}>
-                          <td>
-                            <select
-                              className="idx-select"
-                              value={row.level}
-                              onChange={e => updateRow(idx, 'level', e.target.value)}
-                            >
-                              <option value="0">Prelim (i,ii)</option>
-                              <option value="1">Chapter (16pt)</option>
-                              <option value="2">1.1 (14pt)</option>
-                              <option value="3">1.1.1 (12pt)</option>
-                            </select>
-                          </td>
-                          <td>
-                            <input
-                              className="idx-input"
-                              value={row.text}
-                              onChange={e => updateRow(idx, 'text', e.target.value)}
-                              placeholder="Heading text..."
-                            />
-                          </td>
-                          <td>
-                            <input
-                              className="idx-page"
-                              value={row.page}
-                              onChange={e => updateRow(idx, 'page', e.target.value)}
-                              placeholder="1"
-                            />
-                          </td>
-                          <td>
-                            <div className="idx-actions">
-                              <button className="idx-btn" onClick={() => moveRow(idx, -1)} title="Move up">↑</button>
-                              <button className="idx-btn" onClick={() => moveRow(idx, 1)}  title="Move down">↓</button>
-                              <button className="idx-btn idx-del" onClick={() => removeRow(idx)} title="Delete">✕</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="btn-row" style={{ marginTop: 14 }}>
-                  <button className="btn-primary" onClick={addRow}>+ Add Row</button>
-                  <button className="btn-secondary" onClick={() => setIndexRows(DEFAULT_INDEX_ROWS)}>↺ Reset</button>
-                </div>
+
+                {/* ── PARSE MODE ── */}
+                {indexInputMode === 'parse' && (
+                  <div className="idx-parse-area">
+                    <p className="idx-parse-hint">
+                      Paste your unstructured index / TOC text below. Each line should have a heading and optionally a page number.
+                      <br /><em>Examples: "Chapter 1 Introduction 1", "1.1 Background 2", "Certificate i"</em>
+                    </p>
+                    <textarea
+                      className="raw-textarea"
+                      style={{ minHeight: 320, fontFamily: 'Times New Roman, serif', fontSize: '13px' }}
+                      value={rawIndexInput}
+                      onChange={e => setRawIndexInput(e.target.value)}
+                      placeholder={`Paste unstructured index here, e.g.:\n\nCertificate i\nAbstract ii\nAcknowledgement iii\nList of Tables iv\nList of Figures v\nChapter 1 Introduction 1\n1.1 Background 2\n1.2 Objectives 3\n1.2.1 Specific Goals 4\nChapter 2 Organization Overview 5\n2.1 Departments 6\nReferences 18`}
+                      spellCheck={false}
+                    />
+                    <div className="btn-row" style={{ marginTop: 12 }}>
+                      <button className="btn-primary" onClick={handleParseIndex}>🔍 Parse &amp; Build Index</button>
+                      <button className="btn-secondary" onClick={() => setRawIndexInput('')}>🗑️ Clear</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── MANUAL MODE ── */}
+                {indexInputMode === 'manual' && (
+                  <>
+                    <div className="index-table-wrap">
+                      <table className="index-editor-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: 70 }}>Level</th>
+                            <th>Heading / Title</th>
+                            <th style={{ width: 60 }}>Page</th>
+                            <th style={{ width: 80 }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {indexRows.map((row, idx) => (
+                            <tr key={idx} className={`idx-row idx-level-${row.level}`}>
+                              <td>
+                                <select
+                                  className="idx-select"
+                                  value={row.level}
+                                  onChange={e => updateRow(idx, 'level', e.target.value)}
+                                >
+                                  <option value="0">Prelim (i,ii)</option>
+                                  <option value="1">Ch (16pt)</option>
+                                  <option value="2">1.1 (14pt)</option>
+                                  <option value="3">1.1.1 (12pt)</option>
+                                </select>
+                              </td>
+                              <td>
+                                <input
+                                  className="idx-input"
+                                  value={row.text}
+                                  onChange={e => updateRow(idx, 'text', e.target.value)}
+                                  placeholder="Heading text..."
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  className="idx-page"
+                                  value={row.page}
+                                  onChange={e => updateRow(idx, 'page', e.target.value)}
+                                  placeholder="1"
+                                />
+                              </td>
+                              <td>
+                                <div className="idx-actions">
+                                  <button className="idx-btn" onClick={() => moveRow(idx, -1)} title="Move up">↑</button>
+                                  <button className="idx-btn" onClick={() => moveRow(idx, 1)}  title="Move down">↓</button>
+                                  <button className="idx-btn idx-del" onClick={() => removeRow(idx)} title="Delete">✕</button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="btn-row" style={{ marginTop: 14 }}>
+                      <button className="btn-primary" onClick={addRow}>+ Add Row</button>
+                      <button className="btn-secondary" onClick={() => setIndexRows(DEFAULT_INDEX_ROWS)}>↺ Reset</button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
@@ -564,7 +632,51 @@ function TocRenderer({ tocEntries }) {
   )
 }
 
-// ── Manual Index Preview — ONE single clean output ────────────────────────────
+// ── List of Tables Renderer ───────────────────────────────────────────────────
+function ListOfTablesRenderer({ blocks }) {
+  const tables = blocks.filter(b => b.type === 'table')
+  return (
+    <div className="toc-page-sim">
+      <div className="toc-main-title">LIST OF TABLES</div>
+      <div className="toc-divider" />
+      {tables.length === 0 && (
+        <div style={{ color: '#aaa', fontFamily: 'Times New Roman', fontSize: '12pt', textAlign: 'center', padding: '30px 0' }}>
+          No tables found in the formatted document
+        </div>
+      )}
+      {tables.map((t, i) => (
+        <div key={i} className="toc-row toc-l1">
+          <span className="toc-label">{t.caption}</span>
+          <span className="toc-dots" />
+          <span className="toc-page">{i + 1}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── List of Figures Renderer ──────────────────────────────────────────────────
+function ListOfFiguresRenderer({ blocks }) {
+  const figures = blocks.filter(b => b.type === 'figure')
+  return (
+    <div className="toc-page-sim">
+      <div className="toc-main-title">LIST OF FIGURES</div>
+      <div className="toc-divider" />
+      {figures.length === 0 && (
+        <div style={{ color: '#aaa', fontFamily: 'Times New Roman', fontSize: '12pt', textAlign: 'center', padding: '30px 0' }}>
+          No figures found in the formatted document
+        </div>
+      )}
+      {figures.map((f, i) => (
+        <div key={i} className="toc-row toc-l1">
+          <span className="toc-label">{f.caption}</span>
+          <span className="toc-dots" />
+          <span className="toc-page">{i + 1}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 // level 0 = prelim (roman, bold, no indent)
 // level 1 = chapter (bold, 16pt style, no indent)
 // level 2 = section (normal, indent 1)

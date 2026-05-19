@@ -1,6 +1,6 @@
 # DocFormat 📄 | SBSSU Industrial Training Report Formatter
 
-An interactive web application built with **React 19** and **Vite 8** to format academic and industrial training reports according to the strict, formal formatting guidelines of **Shaheed Bhagat Singh State University (SBSSU)** (formerly Sardar Beant Singh State University).
+An interactive web application built with **React 19** and **Vite 8** to format academic and industrial training reports according to the strict, formal formatting guidelines of ** sardar beant Singh State University (SBSSU)** (formerly Sardar Beant Singh State University).
 
 It allows students and developers to paste their raw, unstructured text, auto-parse headings, tables, lists, and figures, view a real-time Word A4 page simulator preview, and instantly download a beautifully styled, Microsoft Word-compatible **Rich Text Format (.rtf)** document.
 
