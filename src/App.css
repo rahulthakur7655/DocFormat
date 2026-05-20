@@ -506,10 +506,13 @@
 }
 
 .word-preview table.doc-table th {
-  background: #1e7db5;
-  color: #ffffff;
+  background: #d9d9d9;
+  color: #000000;
   padding: 9px 10px;
-  border: 1.5px solid #1565a0;
+  border-top: 2px solid #000;
+  border-bottom: 2px solid #000;
+  border-left: 1px solid #999;
+  border-right: 1px solid #999;
   font-weight: bold;
   text-align: center;
   font-size: 11pt;
@@ -519,7 +522,7 @@
 
 .word-preview table.doc-table td {
   padding: 7px 10px;
-  border: 1px solid #b8d9f0;
+  border: 1px solid #999;
   text-align: left;
   font-size: 11pt;
   color: #000;
@@ -530,7 +533,7 @@
 }
 
 .word-preview table.doc-table tr:nth-child(even) td {
-  background: #d6edfb;
+  background: #d9d9d9;
 }
 
 .word-preview table.doc-table tr:nth-child(odd) td {

@@ -1,12 +1,35 @@
 /**
  * SBSSU Industrial Training Report Formatter
- * Fixes:
- *  - Table caption duplication: if user writes "Table 3.2 Frontend Technologies"
- *    before the pipe-table, that line IS the caption — don't auto-generate another one.
- *  - Heading sizes: Chapter=16pt bold centered, 1./1.1/1.1.1=14pt bold, body=12pt
- *  - Table: centered, autofit width, all borders, dual-color rows
- *  - TOC: auto-built from headings
  */
+
+// ── Markdown / noise stripper ─────────────────────────────────────────────────
+// Strips markdown syntax BEFORE any other processing so the parser
+// sees clean plain text regardless of whether the user pastes markdown.
+function stripMarkdown(line) {
+  let t = line
+  // Remove markdown headings: ## 3.4 Title  →  3.4 Title
+  t = t.replace(/^#{1,6}\s+/, '')
+  // Remove bold/italic markers: **text** / *text* / __text__ / _text_
+  t = t.replace(/\*\*(.+?)\*\*/g, '$1')
+  t = t.replace(/\*(.+?)\*/g, '$1')
+  t = t.replace(/__(.+?)__/g, '$1')
+  t = t.replace(/_(.+?)_/g, '$1')
+  // Remove inline code: `code`
+  t = t.replace(/`(.+?)`/g, '$1')
+  // Remove markdown links: [text](url) → text
+  t = t.replace(/\[(.+?)\]\(.+?\)/g, '$1')
+  return t
+}
+
+// Returns true if a line is pure markdown noise that should be skipped entirely
+function isNoiseLine(line) {
+  const t = line.trim()
+  // Horizontal rules: ---, ***, ___  (3+ chars, all same)
+  if (/^[-*_]{3,}$/.test(t)) return true
+  // Empty after stripping
+  if (!t) return true
+  return false
+}
 
 // ── Heading detector ──────────────────────────────────────────────────────────
 function detectHeadingLevel(line) {
@@ -19,33 +42,65 @@ function detectHeadingLevel(line) {
   if (/^\d+\.\d+\.?\s+\S/.test(t) && !/^\d+\.\d+\.\d+/.test(t)) return 3
   // level 4: "1.1.1 Title"
   if (/^\d+\.\d+\.\d+\.?\s+\S/.test(t)) return 4
-  // ALL CAPS short line
+  // ALL CAPS short line (but not table separator lines)
   if (t === t.toUpperCase() && t.length > 3 && t.length < 80 && /[A-Z]/.test(t) && !/[|]/.test(t)) return 1
   return 0
 }
 
 function isTableLine(line) {
-  return line.includes('|') || (line.includes('\t') && line.split('\t').length >= 2)
+  const t = line.trim()
+  // Must not be a pure separator line like |---|---|
+  if (/^[\s|:\-]+$/.test(t)) return false
+  return t.includes('|') || (t.includes('\t') && t.split('\t').length >= 2)
 }
 
 // Detect if a line is an explicit table caption written by the user
-// e.g. "Table 3.2 Frontend Technologies" or "Table: Technologies Used"
 function isExplicitTableCaption(line) {
   return /^table[\s.:]\s*\d*\.?\d*\s+\S/i.test(line.trim())
 }
 
+function splitTableRow(line) {
+  if (line.includes('|')) {
+    const parts = line.split('|').map(c => c.trim())
+    // Remove empty leading/trailing cells from | col1 | col2 | format
+    const start = parts[0] === '' ? 1 : 0
+    const end   = parts[parts.length - 1] === '' ? parts.length - 1 : parts.length
+    return parts.slice(start, end)
+  }
+  return line.split('\t').map(c => c.trim())
+}
+
 function parseTable(lines) {
-  const rows = lines
-    .filter(l => l.trim() && !/^[-|:\s]+$/.test(l))
-    .map(l => {
-      if (l.includes('|')) {
-        return l.split('|').map(c => c.trim())
-          .filter((c, idx, arr) => !(idx === 0 && c === '') && !(idx === arr.length - 1 && c === ''))
-      }
-      return l.split('\t').map(c => c.trim())
+  // Filter out pure separator lines (|---|---| or ---) 
+  const dataLines = lines
+    .filter(l => {
+      const t = l.trim()
+      if (!t) return false
+      if (/^[\s|:\-]+$/.test(t)) return false
+      return true
     })
-  if (rows.length === 0) return null
-  return { headers: rows[0], rows: rows.slice(1) }
+    .map(l => splitTableRow(l))
+    .filter(row => row.length > 0 && row.some(c => c !== ''))
+
+  if (dataLines.length === 0) return null
+
+  // Detect header row ONLY if ALL cells in the first row are single words
+  // (e.g. "Technology | Purpose | Version" — each cell is one word).
+  // "React.js | Frontend development" has a 2-word cell → NOT a header.
+  const firstRow = dataLines[0]
+  const isHeaderRow = dataLines.length > 1 &&
+    firstRow.length > 0 &&
+    firstRow.every(cell => {
+      const words = cell.trim().split(/\s+/).filter(Boolean)
+      return words.length === 1   // strictly single-word cells only
+    })
+
+  if (isHeaderRow) {
+    return { headers: dataLines[0], rows: dataLines.slice(1), hasHeader: true }
+  }
+
+  // No header row — ALL rows are data rows
+  return { headers: [], rows: dataLines, hasHeader: false }
 }
 
 function isFigureLine(line) {
@@ -57,27 +112,16 @@ function isListItem(line) {
 }
 
 // ── Counters ──────────────────────────────────────────────────────────────────
-let chapterNum     = 0
-let tableCounters  = {}
-let figureCounters = {}
+let chapterNum      = 0
+let figureCounters  = {}
 
-function nextTableCaption(explicitCaption) {
-  if (!tableCounters[chapterNum]) tableCounters[chapterNum] = 0
-  tableCounters[chapterNum]++
-
+// Caption rule: user ALWAYS provides "Table X.Y Title" before the table.
+// We use it exactly as written. If no caption provided, use empty string.
+function useTableCaption(explicitCaption) {
   if (explicitCaption) {
-    // User wrote e.g. "Table 3.2 Frontend Technologies"
-    // Check if they gave an explicit number like "3.2"
-    const numMatch = explicitCaption.match(/^table[\s.:]*(\d+)\.(\d+)\s+(.+)/i)
-    if (numMatch) {
-      // Use EXACTLY what the user wrote — don't override with auto counter
-      return `Table ${numMatch[1]}.${numMatch[2]} ${numMatch[3].trim()}`
-    }
-    // User wrote "Table Frontend Technologies" (no number) — auto-number it
-    const stripped = explicitCaption.replace(/^table[\s.:]*\d*\.?\d*\s*/i, '').trim()
-    return `Table ${chapterNum}.${tableCounters[chapterNum]} ${stripped}`
+    return explicitCaption.trim()
   }
-  return `Table ${chapterNum}.${tableCounters[chapterNum]} Table`
+  return ''   // no caption — user should always provide one
 }
 
 function nextFigureCaption(rawLine) {
@@ -88,17 +132,25 @@ function nextFigureCaption(rawLine) {
   if (numMatch) {
     return `Fig. ${numMatch[1]}.${numMatch[2]} ${numMatch[3].trim()}`
   }
-  const label = rawLine && rawLine !== 'Figure' ? rawLine : 'Figure'
-  return `Fig. ${chapterNum}.${figureCounters[chapterNum]} ${label}`
+  const label = rawLine && rawLine !== 'Figure' ? rawLine : ''
+  const prefix = chapterNum > 0
+    ? `Fig. ${chapterNum}.${figureCounters[chapterNum]}`
+    : `Fig. ${figureCounters[chapterNum]}`
+  return label ? `${prefix} ${label}` : prefix
 }
 
 // ── Main parser ───────────────────────────────────────────────────────────────
 export function parseDocument(rawText) {
   chapterNum     = 0
-  tableCounters  = {}
   figureCounters = {}
 
-  const lines      = rawText.split('\n')
+  // Pre-process: split into lines, skip pure noise, strip markdown syntax
+  const rawLines = rawText.split('\n')
+  const lines    = rawLines.map(l => {
+    if (isNoiseLine(l)) return ''          // blank out noise lines
+    return stripMarkdown(l)                // strip markdown from the rest
+  })
+
   const blocks     = []
   const tocEntries = []
   let i           = 0
@@ -111,34 +163,38 @@ export function parseDocument(rawText) {
     if (!trimmed) { i++; continue }
 
     // ── EXPLICIT TABLE CAPTION LINE followed by pipe-table ────────────────
-    // e.g. user writes:
-    //   Table 3.2 Frontend Technologies
-    //   Tech | Version | Use
-    //   ...
-    if (isExplicitTableCaption(trimmed) && i + 1 < lines.length && isTableLine(lines[i + 1])) {
-      const userCaption = trimmed  // keep the user's caption text
-      i++ // skip caption line, now i points to first table row
-      const tableLines = []
-      while (i < lines.length && (isTableLine(lines[i]) || /^[-|:\s]+$/.test(lines[i].trim()))) {
-        tableLines.push(lines[i])
-        i++
+    // Handles blank lines between caption and table
+    if (isExplicitTableCaption(trimmed)) {
+      // Look ahead past any blank lines to find the table
+      let j = i + 1
+      while (j < lines.length && !lines[j].trim()) j++
+      if (j < lines.length && isTableLine(lines[j])) {
+        const userCaption = trimmed
+        i = j  // skip to first table line (past any blanks)
+        const tableLines = []
+        while (i < lines.length && (isTableLine(lines[i]) || /^[\s|:\-]+$/.test(lines[i].trim()))) {
+          tableLines.push(lines[i])
+          i++
+        }
+        const parsed = parseTable(tableLines)
+        if (parsed) {
+          blocks.push({
+            type: 'table',
+            caption: useTableCaption(userCaption),
+            headers: parsed.headers,
+            rows: parsed.rows,
+            hasHeader: parsed.hasHeader,
+          })
+        }
+        continue
       }
-      const parsed = parseTable(tableLines)
-      if (parsed) {
-        blocks.push({
-          type: 'table',
-          caption: nextTableCaption(userCaption),
-          headers: parsed.headers,
-          rows: parsed.rows,
-        })
-      }
-      continue
+      // No table follows — treat as paragraph
     }
 
     // ── PLAIN TABLE (no preceding caption line) ───────────────────────────
     if (isTableLine(trimmed)) {
       const tableLines = []
-      while (i < lines.length && (isTableLine(lines[i]) || /^[-|:\s]+$/.test(lines[i].trim()))) {
+      while (i < lines.length && (isTableLine(lines[i]) || /^[\s|:\-]+$/.test(lines[i].trim()))) {
         tableLines.push(lines[i])
         i++
       }
@@ -146,9 +202,10 @@ export function parseDocument(rawText) {
       if (parsed) {
         blocks.push({
           type: 'table',
-          caption: nextTableCaption(null),
+          caption: useTableCaption(null),
           headers: parsed.headers,
           rows: parsed.rows,
+          hasHeader: parsed.hasHeader,
         })
       }
       continue
@@ -156,7 +213,6 @@ export function parseDocument(rawText) {
 
     // ── FIGURE ────────────────────────────────────────────────────────────
     if (isFigureLine(trimmed)) {
-      // Pass full trimmed line so nextFigureCaption can detect explicit numbers
       const figTitle = trimmed
         .replace(/^(fig(ure)?\.?\s*|image\s*)/i, '')
         .trim() || 'Figure'
@@ -268,29 +324,30 @@ const FS  = n => n * 2           // font size in half-points
 // Table width in twips: A4 width 12240 - left margin 1800 - right margin 1440 = 8820 twips
 const TABLE_WIDTH = 8820
 
-function rtfTableBorder() {
-  return '\\brdrs\\brdrw15\\brdrcf2'  // solid, 0.75pt, color index 2 (blue)
-}
-
-function rtfCellBorders() {
-  const b = rtfTableBorder()
-  return `\\clbrdrt${b}\\clbrdrl${b}\\clbrdrb${b}\\clbrdrr${b}`
+// ── Border helpers ────────────────────────────────────────────────────────────
+function borderSolid(widthTwips) {
+  return `\\brdrs\\brdrw${widthTwips}\\brdrcf1`
 }
 
 export function generateRTF({ blocks, tocEntries }) {
   // RTF header
-  // Color table: 1=black, 2=dark blue (header border), 3=header bg blue, 4=alt row light blue
+  // Color table:
+  //   1 = black (body text, borders)
+  //   2 = dark blue (TOC section labels, dividers)
+  //   3 = header row bg  — medium blue  (color print)
+  //   4 = alt row bg     — very light blue (color print)
+  //   5 = white
   const header = [
     '{\\rtf1\\ansi\\deff0',
     '{\\fonttbl{\\f0\\froman\\fcharset0 Times New Roman;}}',
     '{\\colortbl;',
     '\\red0\\green0\\blue0;',           // 1 black
-    '\\red21\\green93\\blue149;',        // 2 border blue
-    '\\red30\\green125\\blue181;',       // 3 header bg
-    '\\red214\\green237\\blue251;',      // 4 alt row
+    '\\red21\\green93\\blue149;',        // 2 dark blue (TOC labels)
+    '\\red30\\green125\\blue181;',       // 3 unused (kept for compat)
+    '\\red214\\green237\\blue251;',      // 4 unused
     '\\red255\\green255\\blue255;',      // 5 white
+    '\\red217\\green217\\blue217;',      // 6 light grey (even rows)
     '}',
-    // Page setup: A4, margins 1in T/B, 1.25in L, 1in R
     '\\paperw11906\\paperh16838',
     '\\margl1800\\margr1440\\margt1440\\margb1440',
     '\\widowctrl\\hyphauto',
@@ -427,8 +484,8 @@ export function generateRTF({ blocks, tocEntries }) {
           bold: true, size: 12, align: 'center',
           spaceBefore: 240, spaceAfter: 120,
         }))
-        // Table
-        parts.push(rtfTable(b.headers, b.rows))
+        // Table — pass hasHeader flag
+        parts.push(rtfTableBlock(b))
         // Empty para after table
         parts.push(rtfPara('', { size: 12, spaceAfter: 120 }))
         break
@@ -509,43 +566,71 @@ function rtfTocRow(label, page, indentTwips, bold) {
 }
 
 // ── RTF table ─────────────────────────────────────────────────────────────────
-function rtfTable(headers, rows) {
-  const colCount = headers.length
-  const colW     = Math.floor(TABLE_WIDTH / colCount)
-  const parts    = []
+// Style: grey header + white/grey alternating data rows
+//   Header row : GREY bg (color 6), BOLD black text, thick top+bottom border
+//   Odd rows   : white bg (color 5), normal text, thin borders
+//   Even rows  : light grey bg (color 6), normal text, thin borders
+// All text black — identical in color and B&W print.
+function rtfTable(headers, rows, hasHeader) {
+  const colCount = hasHeader && headers.length > 0
+    ? Math.max(headers.length, ...rows.map(r => r.length))
+    : Math.max(...rows.map(r => r.length), 1)
+  const colW  = Math.floor(TABLE_WIDTH / colCount)
+  const parts = []
 
-  // Header row
-  parts.push(rtfTableRow(headers, colW, colCount, true))
-  // Data rows
+  if (hasHeader && headers.length > 0) {
+    parts.push(buildRtfRow(headers, colW, colCount, 'header'))
+  }
   rows.forEach((row, ri) => {
-    const isEven = ri % 2 === 1  // 0-indexed: odd index = even row visually
-    parts.push(rtfTableRow(row, colW, colCount, false, isEven))
+    parts.push(buildRtfRow(row, colW, colCount, ri % 2 === 0 ? 'odd' : 'even'))
   })
 
   return parts.join('\n')
 }
 
-function rtfTableRow(cells, colW, colCount, isHeader, isAlt = false) {
-  const bgColor = isHeader ? 3 : isAlt ? 4 : 5
-  const borders = rtfCellBorders()
+function buildRtfRow(cells, colW, colCount, style) {
+  const THICK = 30   // 1.5pt — header top/bottom borders
+  const THIN  = 10   // 0.5pt — data borders
 
-  // \trrh0 = auto row height (fits content), \trgaph108 = cell spacing
-  let rowDef = '{\\trowd\\trqc\\trgaph108\\trrh0'
-  for (let c = 0; c < colCount; c++) {
-    rowDef += `${borders}\\clcbpat${bgColor}\\clvertalc\\cellx${colW * (c + 1)}`
+  const isHeader = style === 'header'
+  const isEven   = style === 'even'
+
+  function borders() {
+    const top = isHeader
+      ? `\\brdrs\\brdrw${THICK}\\brdrcf1`
+      : `\\brdrs\\brdrw${THIN}\\brdrcf1`
+    const bot = isHeader
+      ? `\\brdrs\\brdrw${THICK}\\brdrcf1`
+      : `\\brdrs\\brdrw${THIN}\\brdrcf1`
+    const sid = `\\brdrs\\brdrw${THIN}\\brdrcf1`
+    return `\\clbrdrt${top}\\clbrdrl${sid}\\clbrdrb${bot}\\clbrdrr${sid}`
   }
 
-  const cellParts = cells.map(cell => {
-    const txt   = esc(String(cell ?? ''))
-    const bold  = isHeader ? '\\b'  : ''
-    const b0    = isHeader ? '\\b0' : ''
-    const cf    = isHeader ? '\\cf5' : '\\cf1'
+  // Header = grey(6), even data = grey(6), odd data = white(5)
+  const bg = (isHeader || isEven) ? '\\clcbpat6' : '\\clcbpat5'
+
+  let rowDef = '{\\trowd\\trqc\\trgaph108\\trrh0'
+  for (let c = 0; c < colCount; c++) {
+    rowDef += `${borders()}${bg}\\clvertalc\\cellx${colW * (c + 1)}`
+  }
+
+  const cellParts = []
+  for (let c = 0; c < colCount; c++) {
+    const cell  = cells[c] ?? ''
+    const txt   = esc(String(cell))
     const align = isHeader ? '\\qc' : '\\ql'
-    // \sl240\slmult1 = 1.15 line spacing inside cells (not double — keeps cells compact)
-    return `{\\pard${align}\\f0\\fs${FS(11)}${cf}\\sl240\\slmult1\\sb60\\sa60 ${bold}${txt}${b0}\\cell}`
-  })
+    const b     = isHeader ? '\\b'  : ''
+    const b0    = isHeader ? '\\b0' : ''
+    cellParts.push(
+      `{\\pard${align}\\f0\\fs${FS(11)}\\cf1\\sl240\\slmult1\\sb80\\sa80 ${b}${txt}${b0}\\cell}`
+    )
+  }
 
   return `${rowDef}\n${cellParts.join('\n')}\n\\row}`
+}
+
+function rtfTableBlock(b) {
+  return rtfTable(b.headers, b.rows, b.hasHeader === true)
 }
 
 // ── Index-only RTF generator (for the Index Builder section) ─────────────────
@@ -555,9 +640,12 @@ export function generateIndexRTF(indexRows, tableList = [], figureList = []) {
     '{\\rtf1\\ansi\\deff0',
     '{\\fonttbl{\\f0\\froman\\fcharset0 Times New Roman;}}',
     '{\\colortbl;',
-    '\\red0\\green0\\blue0;',
-    '\\red21\\green93\\blue149;',
-    '\\red30\\green125\\blue181;',
+    '\\red0\\green0\\blue0;',           // 1 black
+    '\\red21\\green93\\blue149;',        // 2 dark blue
+    '\\red30\\green125\\blue181;',       // 3 unused
+    '\\red214\\green237\\blue251;',      // 4 unused
+    '\\red255\\green255\\blue255;',      // 5 white
+    '\\red217\\green217\\blue217;',      // 6 light grey
     '}',
     '\\paperw11906\\paperh16838',
     '\\margl1800\\margr1440\\margt1440\\margb1440',
