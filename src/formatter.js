@@ -50,7 +50,7 @@ function detectHeadingLevel(line) {
 function isTableLine(line) {
   const t = line.trim()
   // Must not be a pure separator line like |---|---|
-  if (/^[\s|:\-]+$/.test(t)) return false
+  if (/^[\s|:-]+$/.test(t)) return false
   return t.includes('|') || (t.includes('\t') && t.split('\t').length >= 2)
 }
 
@@ -76,7 +76,7 @@ function parseTable(lines) {
     .filter(l => {
       const t = l.trim()
       if (!t) return false
-      if (/^[\s|:\-]+$/.test(t)) return false
+      if (/^[\s|:-]+$/.test(t)) return false
       return true
     })
     .map(l => splitTableRow(l))
@@ -117,7 +117,7 @@ let figureCounters  = {}
 
 // Caption rule: user ALWAYS provides "Table X.Y Title" before the table.
 // We use it exactly as written. If no caption provided, use empty string.
-function useTableCaption(explicitCaption) {
+function getTableCaption(explicitCaption) {
   if (explicitCaption) {
     return explicitCaption.trim()
   }
@@ -172,7 +172,7 @@ export function parseDocument(rawText) {
         const userCaption = trimmed
         i = j  // skip to first table line (past any blanks)
         const tableLines = []
-        while (i < lines.length && (isTableLine(lines[i]) || /^[\s|:\-]+$/.test(lines[i].trim()))) {
+        while (i < lines.length && (isTableLine(lines[i]) || /^[\s|:-]+$/.test(lines[i].trim()))) {
           tableLines.push(lines[i])
           i++
         }
@@ -180,7 +180,7 @@ export function parseDocument(rawText) {
         if (parsed) {
           blocks.push({
             type: 'table',
-            caption: useTableCaption(userCaption),
+            caption: getTableCaption(userCaption),
             headers: parsed.headers,
             rows: parsed.rows,
             hasHeader: parsed.hasHeader,
@@ -194,7 +194,7 @@ export function parseDocument(rawText) {
     // ── PLAIN TABLE (no preceding caption line) ───────────────────────────
     if (isTableLine(trimmed)) {
       const tableLines = []
-      while (i < lines.length && (isTableLine(lines[i]) || /^[\s|:\-]+$/.test(lines[i].trim()))) {
+      while (i < lines.length && (isTableLine(lines[i]) || /^[\s|:-]+$/.test(lines[i].trim()))) {
         tableLines.push(lines[i])
         i++
       }
@@ -202,7 +202,7 @@ export function parseDocument(rawText) {
       if (parsed) {
         blocks.push({
           type: 'table',
-          caption: useTableCaption(null),
+          caption: getTableCaption(null),
           headers: parsed.headers,
           rows: parsed.rows,
           hasHeader: parsed.hasHeader,
@@ -307,27 +307,22 @@ export function parseDocument(rawText) {
 
 function esc(str) {
   // Escape RTF special chars
-  return String(str)
+  return Array.from(String(str)
     .replace(/\\/g, '\\\\')
     .replace(/\{/g, '\\{')
-    .replace(/\}/g, '\\}')
-    .replace(/[^\x00-\x7F]/g, c => {
+    .replace(/\}/g, '\\}'))
+    .map(c => {
       const code = c.charCodeAt(0)
-      return `\\u${code}?`
+      return code > 127 ? `\\u${code}?` : c
     })
+    .join('')
 }
 
 // twips helpers
-const PT  = n => n * 20          // points → twips (half-points for \fs)
 const FS  = n => n * 2           // font size in half-points
 
 // Table width in twips: A4 width 12240 - left margin 1800 - right margin 1440 = 8820 twips
 const TABLE_WIDTH = 8820
-
-// ── Border helpers ────────────────────────────────────────────────────────────
-function borderSolid(widthTwips) {
-  return `\\brdrs\\brdrw${widthTwips}\\brdrcf1`
-}
 
 export function generateRTF({ blocks, tocEntries }) {
   // RTF header

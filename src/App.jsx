@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import './App.css'
-import { parseDocument, generatePlainText, generateRTF, generateIndexRTF, parseUnstructuredIndex } from './formatter'
+import { parseDocument, generatePlainText, parseUnstructuredIndex } from './formatter'
+import { generateDocxBlob, generateIndexDocxBlob } from './docxExporter'
 
 // ── Placeholder ───────────────────────────────────────────────────────────────
 const PLACEHOLDER = `Paste your unstructured text here...
@@ -133,7 +134,6 @@ export default function App() {
   const [blocks,      setBlocks]      = useState([])
   const [tocEntries,  setTocEntries]  = useState([])
   const [plainText,   setPlainText]   = useState('')
-  const [rtfContent,  setRtfContent]  = useState('')
   const [activeTab,   setActiveTab]   = useState('preview')
   const [activeSection, setActiveSection] = useState('formatter')
   const [copied,      setCopied]      = useState(false)
@@ -152,33 +152,31 @@ export default function App() {
     if (!rawInput.trim()) { showToast('⚠️ Please enter some text first'); return }
     const result = parseDocument(rawInput)
     const plain  = generatePlainText(result)
-    const rtf    = generateRTF(result)
     setBlocks(result.blocks)
     setTocEntries(result.tocEntries)
     setPlainText(plain)
-    setRtfContent(rtf)
     setHasOutput(true)
     showToast('✅ Document formatted — click Download Word File')
   }, [rawInput])
 
   const handleClear = () => {
-    setRawInput(''); setBlocks([]); setTocEntries([]); setPlainText(''); setRtfContent(''); setHasOutput(false)
+    setRawInput(''); setBlocks([]); setTocEntries([]); setPlainText(''); setHasOutput(false)
   }
   const handleLoadSample = () => {
-    setRawInput(SAMPLE_INPUT); setBlocks([]); setTocEntries([]); setPlainText(''); setRtfContent(''); setHasOutput(false)
+    setRawInput(SAMPLE_INPUT); setBlocks([]); setTocEntries([]); setPlainText(''); setHasOutput(false)
     showToast('📄 Sample text loaded')
   }
 
-  // Download as .rtf file — opens directly in Word/WPS with full formatting
-  const handleDownloadRTF = () => {
-    const blob = new Blob([rtfContent], { type: 'application/rtf' })
+  // Download as real .docx file — opens directly in Microsoft Word/WPS
+  const handleDownloadWord = async () => {
+    const blob = await generateDocxBlob({ blocks, tocEntries })
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
     a.href     = url
-    a.download = 'training_report.rtf'
+    a.download = 'training_report.docx'
     a.click()
     URL.revokeObjectURL(url)
-    showToast('📥 Downloaded! Open training_report.rtf in Word/WPS')
+    showToast('📥 Downloaded! Open training_report.docx in Word/WPS')
   }
 
   // Copy plain text fallback
@@ -204,16 +202,15 @@ export default function App() {
       return next
     })
   }
-  const handleDownloadIndex = () => {
-    const rtf  = generateIndexRTF(indexRows)
-    const blob = new Blob([rtf], { type: 'application/rtf' })
+  const handleDownloadIndex = async () => {
+    const blob = await generateIndexDocxBlob(indexRows)
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
     a.href     = url
-    a.download = 'table_of_contents.rtf'
+    a.download = 'table_of_contents.docx'
     a.click()
     URL.revokeObjectURL(url)
-    showToast('📥 Downloaded! Open table_of_contents.rtf in Word/WPS')
+    showToast('📥 Downloaded! Open table_of_contents.docx in Word/WPS')
   }
 
   const handleParseIndex = () => {
@@ -321,8 +318,8 @@ export default function App() {
                   </div>
                   {hasOutput && (
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="btn-download" onClick={handleDownloadRTF}>
-                        📥 Download Word File (.rtf)
+                      <button className="btn-download" onClick={handleDownloadWord}>
+                        📥 Download Word File (.docx)
                       </button>
                       <button className={`copy-btn ${copied ? 'copied' : ''}`} onClick={handleCopy} title="Copy plain text">
                         {copied ? '✅' : '📋'}
@@ -513,7 +510,7 @@ export default function App() {
                   <div><h2>Index Preview</h2><p>Formatted per SBSSU spec · TNR 12pt</p></div>
                 </div>
                 <button className="btn-download" onClick={handleDownloadIndex}>
-                  📥 Download Index (.rtf)
+                  📥 Download Index (.docx)
                 </button>
               </div>
               <div className="panel-body">
